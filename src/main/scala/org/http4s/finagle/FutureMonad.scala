@@ -1,5 +1,7 @@
 package org.http4s.finagle
 
+import scala.languageFeature.{ higherKinds, reflectiveCalls }
+
 import com.twitter.util._
 
 import scalaz._
@@ -7,9 +9,9 @@ import scalaz.syntax.applicative._
 import scalaz.syntax.either._
 
 trait FutureMonad extends MonadError[({ type λ[E, α] = Future[α] })#λ, Throwable]
-  with MonadPlus[Future] with Monad[Future] with Comonad[Future]
-  with Nondeterminism[Future] with Zip[Future] with Catchable[Future]
-  with Traverse[Future] {
+    with MonadPlus[Future] with Monad[Future] with Comonad[Future]
+    with Nondeterminism[Future] with Zip[Future] with Catchable[Future]
+    with Traverse[Future] {
   import Future._
 
   override def raiseError[A](e: Throwable): Future[A] =

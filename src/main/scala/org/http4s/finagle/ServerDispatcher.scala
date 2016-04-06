@@ -1,29 +1,31 @@
-package org.http4s.finagle
+package org.http4s
+package finagle
 
 import java.util.concurrent.atomic.AtomicReference
 
-import com.twitter.finagle.http._
+import com.twitter.io.{ Buf, Reader }
+import com.twitter.finagle.{ Filter, Service, SimpleFilter }
+import com.twitter.finagle.http.codec.HttpServerDispatcher
+import com.twitter.finagle.http.{ Fields, Method => FinagleMethod, Request => FinagleRequest, RequestProxy => FinagleRequestProxy, Response => FinagleResponse, ResponseProxy => FinagleResponseProxy }
+import com.twitter.finagle.stats.StatsReceiver
 import com.twitter.finagle.transport.Transport
-import com.twitter.finagle.{Filter, Service, SimpleFilter, stats}
-import com.twitter.io.{Buf, Reader}
-import com.twitter.util.{Closable, Future}
+import com.twitter.util.{ Closable, Future }
 
-import scalaz.syntax.id._
-import scalaz.syntax.monad._
+import scalaz.syntax.all._
 import scalaz.syntax.std.boolean._
 import scalaz.syntax.std.option._
 
 private[finagle] object ServerDispatcher {
 
   def newServerDispatcher(
-    trans:   Transport[Any, Any],
-    service: Service[Request, Response],
-    ss:      stats.StatsReceiver
+    trans: Transport[Any, Any],
+    service: Service[FinagleRequest, FinagleResponse],
+    stats: StatsReceiver
   ): Closable = {
     val ref = new AtomicReference[Closable]
     val cl = Closable.ref(ref)
     val wrappedService = CloseIfErrorFilter(cl) :: Expect100ContinueFilter(trans) :: FixResponseHeaders(cl) :: service
-    new codec.HttpServerDispatcher(trans, wrappedService, ss) <| ref.set
+    new HttpServerDispatcher(trans, wrappedService, stats) <| ref.set
   }
 
   implicit class ServiceOps[ReqOut, RepIn](val s: Service[ReqOut, RepIn]) extends AnyVal {
@@ -31,31 +33,31 @@ private[finagle] object ServerDispatcher {
       f andThen s
   }
 
-  case class CloseIfErrorFilter(closable: Closable) extends SimpleFilter[Request, Response] {
-    def apply(request: Request, service: Service[Request, Response]): Future[Response] =
+  case class CloseIfErrorFilter(closable: Closable) extends SimpleFilter[FinagleRequest, FinagleResponse] {
+    def apply(request: FinagleRequest, service: Service[FinagleRequest, FinagleResponse]): Future[FinagleResponse] =
       service(request) onSuccess closeIfError(request)
 
-    private def closeIfError(req: Request)(rep: Response): Unit =
+    private def closeIfError(req: FinagleRequest)(rep: FinagleResponse): Unit =
       if (mayHaveRequestBody(req) && isError(rep)) {
         closable.close()
         ()
       }
 
-    private def mayHaveRequestBody(req: Request) =
-      req.method == Method.Put || req.method == Method.Patch
+    private def mayHaveRequestBody(req: FinagleRequest): Boolean =
+      req.method == FinagleMethod.Put || req.method == FinagleMethod.Patch
 
-    private def isError(rep: Response) =
+    private def isError(rep: FinagleResponse): Boolean =
       rep.statusCode >= 400
   }
 
-  case class Expect100ContinueFilter(trans: Transport[Any, Any]) extends SimpleFilter[Request, Response] {
+  case class Expect100ContinueFilter(trans: Transport[Any, Any]) extends SimpleFilter[FinagleRequest, FinagleResponse] {
     import java.util.concurrent.atomic.AtomicBoolean
 
-    def apply(request: Request, service: Service[Request, Response]): Future[Response] =
+    def apply(request: FinagleRequest, service: Service[FinagleRequest, FinagleResponse]): Future[FinagleResponse] =
       service(buildRequest(request))
 
-    private def buildRequest(req: Request): Request =
-      new RequestProxy {
+    private def buildRequest(req: FinagleRequest): FinagleRequest =
+      new FinagleRequestProxy {
         override val request = req
         override val reader: Reader = new Reader {
           val hasWritten100Response = new AtomicBoolean()
@@ -70,26 +72,26 @@ private[finagle] object ServerDispatcher {
         }
       }
 
-    private def write100Response(req: Request) =
+    private def write100Response(req: FinagleRequest): Future[Unit] =
       req.headerMap.get(Fields.Expect)
         .filter(_.trim == "100-continue")
         .cata(_ => trans.write(OneHundredContinueResponse), Future.Done)
   }
 
-  case class FixResponseHeaders(closable: Closable) extends SimpleFilter[Request, Response] {
-    def apply(request: Request, service: Service[Request, Response]): Future[Response] =
+  case class FixResponseHeaders(closable: Closable) extends SimpleFilter[FinagleRequest, FinagleResponse] {
+    def apply(request: FinagleRequest, service: Service[FinagleRequest, FinagleResponse]): Future[FinagleResponse] =
       service(request) map handleResponse(request)
 
-    private def mayHaveChunkedResponseBody(req: Request, rep: Response) =
-      !rep.contentLength.contains(0) && rep.isChunked && rep.statusCode < 300 && req.method == Method.Get
+    private def mayHaveChunkedResponseBody(req: FinagleRequest, rep: FinagleResponse) =
+      !rep.contentLength.contains(0) && rep.isChunked && rep.statusCode < 300 && req.method == FinagleMethod.Get
 
-    private def isError(rep: Response) =
+    private def isError(rep: FinagleResponse): Boolean =
       rep.statusCode >= 400
 
-    private def mayHaveRequestBody(req: Request) =
-      req.method == Method.Put || req.method == Method.Patch
+    private def mayHaveRequestBody(req: FinagleRequest): Boolean =
+      req.method == FinagleMethod.Put || req.method == FinagleMethod.Patch
 
-    private def handleResponse(req: Request)(rep: Response): Response = {
+    private def handleResponse(req: FinagleRequest)(rep: FinagleResponse): FinagleResponse = {
       if (mayHaveRequestBody(req) && isError(rep)) {
         closable.close()
       }
@@ -97,8 +99,8 @@ private[finagle] object ServerDispatcher {
     }
 
     // A chunked-encoded response must not have a Content-Length header, but we need it.
-    private def responseWithChunkedEncodingAndContentLength(rep: Response): Response =
-      new ResponseProxy {
+    private def responseWithChunkedEncodingAndContentLength(rep: FinagleResponse): FinagleResponse =
+      new FinagleResponseProxy {
         import org.jboss.netty.handler.codec.http.DefaultHttpHeaders
         val response = rep
         override def reader = rep.reader

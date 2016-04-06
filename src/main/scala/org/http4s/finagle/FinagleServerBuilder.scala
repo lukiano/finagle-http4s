@@ -3,33 +3,36 @@ package finagle
 
 import java.io.FileInputStream
 import java.net.InetSocketAddress
-import java.security.{KeyStore, Security}
-import java.util.concurrent.{ConcurrentLinkedQueue, ExecutorService}
-import javax.net.ssl.{KeyManagerFactory, SSLContext, TrustManagerFactory}
+import java.security.{ KeyStore, Security }
+import java.util.concurrent.{ ConcurrentLinkedQueue, ExecutorService }
+import javax.net.ssl.{ KeyManagerFactory, SSLContext, TrustManagerFactory }
 
 import com.codahale.metrics.MetricRegistry
-import com.twitter.concurrent.{BridgedThreadPoolScheduler, Scheduler}
-import com.twitter.finagle.{ListeningServer, Service, ServiceFactory}
-import com.twitter.finagle.builder.{ServerBuilder => FinagleBuilder}
-import com.twitter.finagle.http.{Request => FinagleRequest, Response => FinagleResponse}
-import com.twitter.finagle.stats.{DefaultStatsReceiver, StatsReceiver}
+import com.twitter.concurrent.{ BridgedThreadPoolScheduler, Scheduler }
+import com.twitter.finagle.builder.{ ServerBuilder => FinagleBuilder }
+import com.twitter.finagle.http.{ Request => FinagleRequest, Response => FinagleResponse }
+import com.twitter.finagle.stats.{ DefaultStatsReceiver, StatsReceiver }
 import com.twitter.finagle.util.InetSocketAddressUtil
-import com.twitter.util.{Await, Future, Duration => TwitterDuration}
-import org.http4s.server.{IdleTimeoutSupport, MetricsSupport, SSLSupport, Server, ServerBuilder}
+import com.twitter.finagle.{ ListeningServer, Service => FinagleService, ServiceFactory }
+import com.twitter.util.{ Await, Future, Duration => TwitterDuration }
+import org.http4s.server._
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
-import scalaz.syntax.std.option._
 import scalaz.concurrent.Task
+import scalaz.syntax.std.option._
 
-case class FinagleServerBuilder(executorService: Option[ExecutorService] = None,
-                                services: List[(String, HttpService)] = Nil,
-                                socketAddress: InetSocketAddress = ServerBuilder.DefaultSocketAddress,
-                                metricRegistry: Option[MetricRegistry] = None,
-                                metricPrefix: Option[String] = None,
-                                idleTimeout: Duration = IdleTimeoutSupport.DefaultIdleTimeout,
-                                sslBits: Option[SSLSupport.SSLBits] = None
-                               ) extends ServerBuilder with MetricsSupport with IdleTimeoutSupport with SSLSupport {
+import FinagleConverters._
+
+case class FinagleServerBuilder(
+    executorService: Option[ExecutorService] = None,
+    services: List[(String, HttpService)] = Nil,
+    socketAddress: InetSocketAddress = ServerBuilder.DefaultSocketAddress,
+    metricRegistry: Option[MetricRegistry] = None,
+    metricPrefix: Option[String] = None,
+    idleTimeout: Duration = IdleTimeoutSupport.DefaultIdleTimeout,
+    sslBits: Option[SSLSupport.SSLBits] = None
+) extends ServerBuilder with MetricsSupport with IdleTimeoutSupport with SSLSupport {
 
   override type Self = FinagleServerBuilder
 
@@ -49,20 +52,26 @@ case class FinagleServerBuilder(executorService: Option[ExecutorService] = None,
     copy(sslBits = Some(SSLSupport.SSLBits(keyStore, keyManagerPassword, protocol, trustStore, clientAuth)))
 
   override def start: Task[Server] = Task.delay {
+    NettyLogger()
+    val finagleLogger = com.twitter.finagle.util.DefaultLogger
+    finagleLogger.setLevel(java.util.logging.Level.ALL)
+    finagleLogger.setUseParentHandlers(false)
+    finagleLogger.addHandler(new org.slf4j.bridge.SLF4JBridgeHandler())
     executorService.foreach { es => Scheduler.setUnsafe(new BridgedThreadPoolScheduler("custom", _ => es)) }
     new Server {
       private val aggregateService = server.Router(services.reverse: _*)
 
       private val serviceFactory: ServiceFactory[FinagleRequest, FinagleResponse] = ServiceFactory(() => Future {
-        Service.mk {
-          aggregateService.dimap(Converters.buildRequest, Converters.handleResponse).mapK(_.asFuture()).run
+        FinagleService.mk {
+          aggregateService.dimap(buildRequest, handleResponse).mapK(_.asFuture()).run
         }
       })
 
       private val shutdownHooks = new ConcurrentLinkedQueue[() => Unit]()
 
       private val stats: StatsReceiver = metricRegistry.cata(
-          registry => new CHMetricsStatsReceiver(registry, metricPrefix getOrElse ""), DefaultStatsReceiver)
+        registry => new CHMetricsStatsReceiver(registry, metricPrefix getOrElse ""), DefaultStatsReceiver
+      )
 
       private val builder = FinagleBuilder()
         .codec(new ServerCodec(stats).server)
@@ -104,7 +113,8 @@ case class FinagleServerBuilder(executorService: Option[ExecutorService] = None,
 
         val kmf = KeyManagerFactory.getInstance(
           Option(Security.getProperty("ssl.KeyManagerFactory.algorithm"))
-            .getOrElse(KeyManagerFactory.getDefaultAlgorithm))
+            .getOrElse(KeyManagerFactory.getDefaultAlgorithm)
+        )
 
         kmf.init(ks, bits.keyManagerPassword.toCharArray)
 
@@ -123,7 +133,7 @@ case class FinagleServerBuilder(executorService: Option[ExecutorService] = None,
         this
       }
 
-      override def awaitShutdown(): Unit = Await.ready(finagleServer)
+      override def awaitShutdown(): Unit = Await.result(finagleServer)
 
       private val hook = new Thread(new Runnable {
         def run() = {

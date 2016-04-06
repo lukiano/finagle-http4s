@@ -1,7 +1,7 @@
 package org.http4s.finagle
 
-import com.codahale.metrics.{Gauge, MetricRegistry}
-import com.twitter.finagle.stats.{Counter, Stat, StatsReceiver, Gauge => FGauge}
+import com.codahale.metrics.{ Gauge, MetricRegistry }
+import com.twitter.finagle.stats.{ Counter, Stat, StatsReceiver, Gauge => FGauge }
 
 import scalaz.syntax.id._
 

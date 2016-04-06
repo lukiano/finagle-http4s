@@ -2,37 +2,34 @@ package org.http4s.finagle
 
 import java.util.concurrent.atomic.AtomicReference
 
+import scalaz.concurrent.Task
 import scalaz.std.option.none
 import scalaz.stream.Process
-import scalaz.syntax.monad._
 import scalaz.syntax.monoid._
 import scalaz.syntax.std.option._
-import scalaz._
+import scalaz.Monoid
 
-class ProcessStepper[F[_]: Monad: Catchable, A: Monoid](p: Process[F, A]) {
+class ProcessStepper[A: Monoid](p: Process[Task, A]) {
   import scalaz.stream.Cause._
-  import scalaz.stream.Process.{Await, Emit, Halt, Step}
+  import scalaz.stream.Process.{ Await, Emit, Halt, Step }
 
-  private val cur = new AtomicReference[Process[F, A]](p)
+  private val cur = new AtomicReference[Process[Task, A]](p)
 
-  def read: F[Option[A]] = readFrom(finishing = true)
+  def read: Task[Option[A]] = readFrom
 
-  val Done: F[Option[A]] = none[A].point[F]
+  private val Done: Task[Option[A]] = Task.now(none[A])
 
-  private def readFrom(finishing: Boolean): F[Option[A]] = {
+  private def readFrom: Task[Option[A]] = {
     cur.get.step match {
-      case s: Step[F, A] @unchecked =>
+      case s: Step[Task, A] @unchecked =>
         (s.head, s.next) match {
           case (Emit(os), cont) =>
-            os.foldLeft[A](∅)((a, o) => a |+| o).point[F] >>= { a =>
-              cur.set(cont.continue)
-              a.some.point[F]
-            }
-          case (awt: Await[F, Any, A] @unchecked, cont) =>
-            awt.evaluate flatMap {
-              q =>
-                cur.set(q +: cont)
-                readFrom(finishing = false)
+            cur.set(cont.continue)
+            Task.now(os.foldLeft[A](∅)((a, o) => a |+| o).some)
+          case (awt: Await[Task, Any, A] @unchecked, cont) =>
+            awt.evaluate flatMap { p =>
+              cur.set(p +: cont)
+              readFrom
             }
         }
       case Halt(End) =>
@@ -40,7 +37,7 @@ class ProcessStepper[F[_]: Monad: Catchable, A: Monoid](p: Process[F, A]) {
       case Halt(Kill) =>
         Done
       case Halt(Error(rsn)) =>
-        Catchable[F].fail(rsn)
+        Task.fail(rsn)
     }
   }
 }

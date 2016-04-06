@@ -4,10 +4,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import com.twitter.util._
 import com.twitter.finagle.tracing.Trace
-import org.jboss.netty.handler.codec.http.{DefaultHttpResponse, HttpResponseStatus, HttpVersion => Version}
+import org.jboss.netty.handler.codec.http.{ DefaultHttpResponse, HttpResponseStatus, HttpVersion => Version }
 
 import scalaz.concurrent.Task
-import scalaz.syntax.id._
+import scalaz.syntax.all._
 
 package object finagle {
   val bufferSize = 32768
@@ -18,7 +18,7 @@ package object finagle {
     def asTask: Task[A] = Task.async { cb =>
       f.respond {
         case Return(a) => cb(a.right)
-        case Throw(t)  => cb(t.left)
+        case Throw(t) => cb(t.left)
       }
     }
   }
