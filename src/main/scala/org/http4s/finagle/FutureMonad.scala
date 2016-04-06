@@ -5,13 +5,11 @@ import scala.languageFeature.{ higherKinds, reflectiveCalls }
 import com.twitter.util._
 
 import scalaz._
-import scalaz.syntax.applicative._
 import scalaz.syntax.either._
 
 trait FutureMonad extends MonadError[({ type λ[E, α] = Future[α] })#λ, Throwable]
-    with MonadPlus[Future] with Monad[Future] with Comonad[Future]
-    with Nondeterminism[Future] with Zip[Future] with Catchable[Future]
-    with Traverse[Future] {
+    with MonadPlus[Future] with Monad[Future] with Cobind[Future]
+    with Nondeterminism[Future] with Zip[Future] with Catchable[Future] {
   import Future._
 
   override def raiseError[A](e: Throwable): Future[A] =
@@ -31,9 +29,6 @@ trait FutureMonad extends MonadError[({ type λ[E, α] = Future[α] })#λ, Throw
 
   override def ap[A, B](fa: => Future[A])(f: => Future[A => B]): Future[B] =
     (f join fa) map { case (f1, a1) => f1(a1) }
-
-  override def copoint[A](p: Future[A]): A =
-    Await.result(p)
 
   override def cobind[A, B](fa: Future[A])(f: Future[A] => B): Future[B] =
     Future(f(fa))
@@ -66,7 +61,4 @@ trait FutureMonad extends MonadError[({ type λ[E, α] = Future[α] })#λ, Throw
 
   override def fail[A](e: Throwable): Future[A] =
     raiseError(e)
-
-  override def traverseImpl[G[_]: Applicative, A, B](fa: Future[A])(f: A => G[B]): G[Future[B]] =
-    copoint(fa map f) map value
 }
