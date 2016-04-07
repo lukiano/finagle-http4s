@@ -2,9 +2,9 @@
 # Do not use tabs to indent your configuration.
 # You can specify a custom docker image from Dockerhub
 # for your build environment.
-# image: java/latest
+image: java:latest
 pipeline:
   - job:
     script:
-      - ./ sbt compile test package
+      - ./sbt compile test package
             
