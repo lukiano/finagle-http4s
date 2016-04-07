@@ -5,6 +5,6 @@
 image: java:latest
 pipeline:
   - job:
-    script:
-      - ./sbt compile test package
+      script:
+        - ./sbt compile test package
             
