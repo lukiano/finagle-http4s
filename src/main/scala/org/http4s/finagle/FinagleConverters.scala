@@ -80,42 +80,62 @@ object FinagleConverters {
         FinagleStatus(s.code)
     }
 
-  def buildRequest(req: FinagleRequest): Request =
-    Request(
-      method = method.to(req.method),
-      uri = Uri.fromString(req.uri).fold(_ => throw new IllegalArgumentException, identity),
-      httpVersion = version.to(req.version),
-      headers = headers.to(req.headerMap),
-      body = hasBody(req).fold(ReaderUtils.fromReader(req.reader), EmptyBody)
-    )
+  val request: FinagleRequest <=> Request =
+    new (FinagleRequest <=> Request) {
+      val to: FinagleRequest => Request = req =>
+        Request(
+          method = method.to(req.method),
+          uri = Uri.fromString(req.uri).fold(_ => throw new IllegalArgumentException, identity),
+          httpVersion = version.to(req.version),
+          headers = headers.to(req.headerMap),
+          body = hasBody(req).fold(ReaderUtils.fromReader(req.reader), EmptyBody)
+        )
+      val from: Request => FinagleRequest = req =>
+        FinagleRequest(
+          version = version.from(req.httpVersion),
+          method = method.from(req.method),
+          uri = req.uri.renderString,
+          reader = ReaderUtils.withProcessReader(req.body)
+        )
+    }
 
   private def hasBody(request: FinagleRequest): Boolean =
     request.isChunked || request.contentLength.exists(_ > 0)
 
-  def handleResponse(rep: Response): FinagleResponse =
-    new FinagleResponseProxy {
-      private val responseStream = rep.body.some filter (!_.isHalt) filter (_ => !rep.contentLength.contains(0)) // ignore stream if 0-length
-      private val body = responseStream flatMap getBody
+  val response: FinagleResponse <=> Response =
+    new (FinagleResponse <=> Response) {
+      val to: FinagleResponse => Response = rep =>
+        Response(
+          status = status.to(rep.status),
+          httpVersion = version.to(rep.version),
+          headers = headers.to(rep.headerMap),
+          body = EmptyBody // rep.content.isEmpty
+        )
+      val from: Response => FinagleResponse = rep =>
+        new FinagleResponseProxy {
+          private val responseStream = rep.body.some filter (!_.isHalt) filter (_ => !rep.contentLength.contains(0)) // ignore stream if 0-length
+          private val body = responseStream flatMap getBody
 
-      override val response = FinagleResponse(FinagleConverters.version.from(rep.httpVersion), FinagleConverters.status.from(rep.status))
+          override val response = FinagleResponse(FinagleConverters.version.from(rep.httpVersion), FinagleConverters.status.from(rep.status))
 
-      response.headerMap setAll FinagleConverters.headers.from(rep.headers)
+          response.headerMap setAll FinagleConverters.headers.from(rep.headers)
 
-      private def getBody(stream: EntityBody): Option[ByteVector] = // retrieve content from stream if it's an Emit
-        stream.step match {
-          case s: Step[Task, ByteVector] =>
-            s.head match {
-              case Emit(seqbv) => Some(seqbv.toIndexedSeq.sumr)
+          private def getBody(stream: EntityBody): Option[ByteVector] = // retrieve content from stream if it's an Emit
+            stream.step match {
+              case s: Step[Task, ByteVector] =>
+                s.head match {
+                  case Emit(seqbv) => Some(seqbv.toIndexedSeq.sumr)
+                  case _ => None
+                }
               case _ => None
             }
-          case _ => None
+          body.foreach { bv => content = ReaderUtils.toBuf(bv) }
+
+          override val isChunked = responseStream.isDefined && body.isEmpty
+
+          override val reader =
+            responseStream.cata(st => ReaderUtils.withProcessReader(st), EmptyReader)
         }
-      body.foreach { bv => content = ReaderUtils.toBuf(bv) }
-
-      override val isChunked = responseStream.isDefined && body.isEmpty
-
-      override val reader =
-        responseStream.cata(st => ReaderUtils.withProcessReader(st), EmptyReader)
     }
 
   private object EmptyReader extends Reader {

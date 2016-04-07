@@ -15,6 +15,7 @@ libraryDependencies ++= Seq(
   "com.twitter" %% "finagle-http"  % FINAGLE_VERSION % "provided",
   "org.http4s"  %% "http4s-core"   % HTTP4S_VERSION % "provided",
   "org.http4s"  %% "http4s-server" % HTTP4S_VERSION % "provided",
+  "org.http4s"  %% "http4s-client" % HTTP4S_VERSION % "provided",
   "org.scodec"  %% "scodec-scalaz" % "1.0.0" % "provided",
   "org.slf4j"    % "jul-to-slf4j"  % "1.7.12"
 )
