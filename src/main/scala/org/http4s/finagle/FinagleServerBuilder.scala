@@ -63,7 +63,7 @@ case class FinagleServerBuilder(
 
       private val serviceFactory: ServiceFactory[FinagleRequest, FinagleResponse] = ServiceFactory(() => Future {
         FinagleService.mk {
-          aggregateService.dimap(buildRequest, handleResponse).mapK(_.asFuture()).run
+          aggregateService.dimap(request.to, response.from).mapK(_.asFuture()).run
         }
       })
 
