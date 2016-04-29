@@ -36,39 +36,39 @@ object FinagleConverters {
           h.keySet.toList map { name => Header(name, h.getAll(name).mkString(",")).parsed }
         }
       val from: Headers => HeaderMap = h => {
-        val map = scala.collection.mutable.Map.empty[String, Seq[String]]
+        val map = new MapHeaderMap
         h.foreach { header =>
-          map += (header.name.value -> header.value.split(',').map(_.trim))
+          map += (header.name.value -> header.value)
         }
-        new MapHeaderMap(map)
+        map
       }
     }
 
   val method: FinagleMethod <=> Method =
     new (FinagleMethod <=> Method) {
       val to: FinagleMethod => Method = {
-        case FinagleMethod.Get => Method.GET
-        case FinagleMethod.Post => Method.POST
-        case FinagleMethod.Put => Method.PUT
-        case FinagleMethod.Head => Method.HEAD
-        case FinagleMethod.Patch => Method.PATCH
-        case FinagleMethod.Delete => Method.DELETE
-        case FinagleMethod.Trace => Method.TRACE
+        case FinagleMethod.Get     => Method.GET
+        case FinagleMethod.Post    => Method.POST
+        case FinagleMethod.Put     => Method.PUT
+        case FinagleMethod.Head    => Method.HEAD
+        case FinagleMethod.Patch   => Method.PATCH
+        case FinagleMethod.Delete  => Method.DELETE
+        case FinagleMethod.Trace   => Method.TRACE
         case FinagleMethod.Connect => Method.CONNECT
         case FinagleMethod.Options => Method.OPTIONS
-        case other => Method.fromString(other.toString()).fold(_ => throw new IllegalArgumentException, identity)
+        case other                 => Method.fromString(other.toString()).fold(_ => throw new IllegalArgumentException, identity)
       }
       val from: Method => FinagleMethod = {
-        case Method.GET => FinagleMethod.Get
-        case Method.POST => FinagleMethod.Post
-        case Method.PUT => FinagleMethod.Put
-        case Method.HEAD => FinagleMethod.Head
-        case Method.PATCH => FinagleMethod.Patch
-        case Method.DELETE => FinagleMethod.Delete
-        case Method.TRACE => FinagleMethod.Trace
+        case Method.GET     => FinagleMethod.Get
+        case Method.POST    => FinagleMethod.Post
+        case Method.PUT     => FinagleMethod.Put
+        case Method.HEAD    => FinagleMethod.Head
+        case Method.PATCH   => FinagleMethod.Patch
+        case Method.DELETE  => FinagleMethod.Delete
+        case Method.TRACE   => FinagleMethod.Trace
         case Method.CONNECT => FinagleMethod.Connect
         case Method.OPTIONS => FinagleMethod.Options
-        case other => FinagleMethod(other.name)
+        case other          => FinagleMethod(other.name)
       }
     }
 
@@ -125,7 +125,7 @@ object FinagleConverters {
               case s: Step[Task, ByteVector] =>
                 s.head match {
                   case Emit(seqbv) => Some(seqbv.toIndexedSeq.sumr)
-                  case _ => None
+                  case _           => None
                 }
               case _ => None
             }

@@ -18,9 +18,9 @@ import scalaz.syntax.std.option._
 private[finagle] object ServerDispatcher {
 
   def newServerDispatcher(
-    trans: Transport[Any, Any],
+    trans:   Transport[Any, Any],
     service: Service[FinagleRequest, FinagleResponse],
-    stats: StatsReceiver
+    stats:   StatsReceiver
   ): Closable = {
     val ref = new AtomicReference[Closable]
     val cl = Closable.ref(ref)

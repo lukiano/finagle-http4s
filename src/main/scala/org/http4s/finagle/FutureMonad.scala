@@ -56,7 +56,7 @@ trait FutureMonad extends MonadError[({ type λ[E, α] = Future[α] })#λ, Throw
   override def attempt[A](fa: Future[A]): Future[Throwable \/ A] =
     fa transform {
       case Return(a) => value(a.right)
-      case Throw(t) => value(t.left[A])
+      case Throw(t)  => value(t.left[A])
     }
 
   override def fail[A](e: Throwable): Future[A] =

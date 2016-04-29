@@ -10,7 +10,7 @@ import scalaz.concurrent.Task
 import scalaz.syntax.all._
 
 package object finagle {
-  val bufferSize = 32768
+  val bufferSize = 65536
 
   implicit object TwitterFutureMonad extends FutureMonad
 
@@ -18,7 +18,7 @@ package object finagle {
     def asTask: Task[A] = Task.async { cb =>
       f.respond {
         case Return(a) => cb(a.right)
-        case Throw(t) => cb(t.left)
+        case Throw(t)  => cb(t.left)
       }
     }
   }

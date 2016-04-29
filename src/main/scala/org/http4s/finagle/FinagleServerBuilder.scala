@@ -13,7 +13,7 @@ import com.twitter.finagle.builder.{ ServerBuilder => FinagleBuilder }
 import com.twitter.finagle.http.{ Request => FinagleRequest, Response => FinagleResponse }
 import com.twitter.finagle.stats.{ DefaultStatsReceiver, StatsReceiver }
 import com.twitter.finagle.util.InetSocketAddressUtil
-import com.twitter.finagle.{ ListeningServer, Service => FinagleService, ServiceFactory }
+import com.twitter.finagle.{ ListeningServer, ServiceFactory, Service => FinagleService }
 import com.twitter.util.{ Await, Future, Duration => TwitterDuration }
 import org.http4s.server._
 
@@ -21,17 +21,18 @@ import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
 import scalaz.concurrent.Task
 import scalaz.syntax.std.option._
-
 import FinagleConverters._
+import com.twitter.finagle.netty4.Netty4Server
 
 case class FinagleServerBuilder(
-    executorService: Option[ExecutorService] = None,
-    services: List[(String, HttpService)] = Nil,
-    socketAddress: InetSocketAddress = ServerBuilder.DefaultSocketAddress,
-    metricRegistry: Option[MetricRegistry] = None,
-    metricPrefix: Option[String] = None,
-    idleTimeout: Duration = IdleTimeoutSupport.DefaultIdleTimeout,
-    sslBits: Option[SSLSupport.SSLBits] = None
+    executorService: Option[ExecutorService]     = None,
+    services:        List[(String, HttpService)] = Nil,
+    socketAddress:   InetSocketAddress           = ServerBuilder.DefaultSocketAddress,
+    metricRegistry:  Option[MetricRegistry]      = None,
+    metricPrefix:    Option[String]              = None,
+    idleTimeout:     Duration                    = IdleTimeoutSupport.DefaultIdleTimeout,
+    sslBits:         Option[SSLSupport.SSLBits]  = None,
+    lowLevel:        Boolean                     = false
 ) extends ServerBuilder with MetricsSupport with IdleTimeoutSupport with SSLSupport {
 
   override type Self = FinagleServerBuilder
@@ -50,6 +51,8 @@ case class FinagleServerBuilder(
 
   override def withSSL(keyStore: SSLSupport.StoreInfo, keyManagerPassword: String, protocol: String, trustStore: Option[SSLSupport.StoreInfo], clientAuth: Boolean) =
     copy(sslBits = Some(SSLSupport.SSLBits(keyStore, keyManagerPassword, protocol, trustStore, clientAuth)))
+
+  def withLowLevelDispatcher(lowLevel: Boolean) = copy(lowLevel = lowLevel)
 
   override def start: Task[Server] = Task.delay {
     NettyLogger()
@@ -73,11 +76,18 @@ case class FinagleServerBuilder(
         registry => new CHMetricsStatsReceiver(registry, metricPrefix getOrElse ""), DefaultStatsReceiver
       )
 
+      private def toTwitterDuration(duration: Duration): TwitterDuration =
+        duration match {
+          case Duration(length, unit) => TwitterDuration(length, unit)
+          case Duration.Inf           => TwitterDuration.Top
+          case Duration.MinusInf      => TwitterDuration.Bottom
+          case Duration.Undefined     => TwitterDuration.Undefined
+        }
+
       private val builder = FinagleBuilder()
-        .codec(new ServerCodec(stats).server)
         .bindTo(socketAddress)
         .name("Http4sFinagleServer")
-        .readTimeout(TwitterDuration(idleTimeout.length, idleTimeout.unit))
+        .readTimeout(toTwitterDuration(idleTimeout))
         .reportTo(stats)
 
       getContext.foreach {
@@ -90,8 +100,18 @@ case class FinagleServerBuilder(
           })
       }
 
-      private val finagleServer: ListeningServer = builder.build(serviceFactory)
-
+      private val finagleServer: ListeningServer =
+        if (lowLevel) {
+          builder.stack(
+            new Netty4Server[Request, Response](bufferSize, {
+              new Netty4ServerDispatcher(_, _)
+            })
+          ).build(serviceFactory)
+        } else {
+          builder.codec(
+            new ServerCodec(stats).server
+          ).build(serviceFactory)
+        }
       private def getContext: Option[(SSLContext, Boolean)] = sslBits.map { bits =>
         val ksStream = new FileInputStream(bits.keyStore.path)
         val ks = KeyStore.getInstance("JKS")

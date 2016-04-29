@@ -19,7 +19,7 @@ class ServerCodec(stats: StatsReceiver) extends CodecFactory[Request, Response] 
       }
       override def newServerDispatcher(
         transport: Transport[Any, Any],
-        service: Service[Request, Response]
+        service:   Service[Request, Response]
       ): Closable =
         ServerDispatcher.newServerDispatcher(transport, service, stats)
     }

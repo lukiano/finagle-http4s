@@ -15,9 +15,9 @@ object FinagleClient {
   def getAddress(req: Request): Name.Bound = {
     val port = req.uri.port orElse {
       req.uri.scheme map { _.value.toLowerCase } flatMap {
-        case "http" => Some(80)
+        case "http"  => Some(80)
         case "https" => Some(443)
-        case _ => None
+        case _       => None
       }
     } getOrElse 80
     Name.bound(Address(req.uri.host.get.value, port))

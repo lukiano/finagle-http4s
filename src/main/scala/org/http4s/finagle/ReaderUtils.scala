@@ -23,7 +23,7 @@ class ProcessReader(st: EntityBody) extends Reader {
   private val listener = new FutureEventListener[Option[Buf]] {
     def onFailure(cause: Throwable): Unit = cause match {
       case _: ClosedChannelException => logger.info(cause)("Exception while processing stream")
-      case _ => logger.warn(cause)("Exception while processing stream")
+      case _                         => logger.warn(cause)("Exception while processing stream")
     }
     def onSuccess(value: Option[Buf]): Unit = ()
   }
