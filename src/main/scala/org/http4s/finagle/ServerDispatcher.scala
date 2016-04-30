@@ -15,22 +15,29 @@ import scalaz.syntax.all._
 import scalaz.syntax.std.boolean._
 import scalaz.syntax.std.option._
 
+import FinagleConverters._
+
 private[finagle] object ServerDispatcher {
 
   def newServerDispatcher(
     trans:   Transport[Any, Any],
-    service: Service[FinagleRequest, FinagleResponse],
+    service: Service[Request, Response],
     stats:   StatsReceiver
   ): Closable = {
     val ref = new AtomicReference[Closable]
-    val cl = Closable.ref(ref)
-    val wrappedService = CloseIfErrorFilter(cl) :: Expect100ContinueFilter(trans) :: FixResponseHeaders(cl) :: service
+    val cl = Closable.ref(ref) //aggregateService.dimap(request.to, response.from).mapK(_.asFuture()).run
+    val wrappedService = CloseIfErrorFilter(cl) :: Expect100ContinueFilter(trans) :: FixResponseHeaders(cl) :: AdapterFilter :: service
     new HttpServerDispatcher(trans, wrappedService, stats) <| ref.set
   }
 
   implicit class ServiceOps[ReqOut, RepIn](val s: Service[ReqOut, RepIn]) extends AnyVal {
     def ::[ReqIn, RepOut](f: Filter[ReqIn, RepOut, ReqOut, RepIn]): Service[ReqIn, RepOut] =
       f andThen s
+  }
+
+  case object AdapterFilter extends Filter[FinagleRequest, FinagleResponse, Request, Response] {
+    def apply(req: FinagleRequest, service: Service[Request, Response]): Future[FinagleResponse] =
+      service(request.to(req)) map response.from
   }
 
   case class CloseIfErrorFilter(closable: Closable) extends SimpleFilter[FinagleRequest, FinagleResponse] {

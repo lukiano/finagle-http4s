@@ -10,7 +10,6 @@ import javax.net.ssl.{ KeyManagerFactory, SSLContext, TrustManagerFactory }
 import com.codahale.metrics.MetricRegistry
 import com.twitter.concurrent.{ BridgedThreadPoolScheduler, Scheduler }
 import com.twitter.finagle.builder.{ ServerBuilder => FinagleBuilder }
-import com.twitter.finagle.http.{ Request => FinagleRequest, Response => FinagleResponse }
 import com.twitter.finagle.stats.{ DefaultStatsReceiver, StatsReceiver }
 import com.twitter.finagle.util.InetSocketAddressUtil
 import com.twitter.finagle.{ ListeningServer, ServiceFactory, Service => FinagleService }
@@ -21,7 +20,6 @@ import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
 import scalaz.concurrent.Task
 import scalaz.syntax.std.option._
-import FinagleConverters._
 import com.twitter.finagle.netty4.Netty4Server
 
 case class FinagleServerBuilder(
@@ -64,9 +62,9 @@ case class FinagleServerBuilder(
     new Server {
       private val aggregateService = server.Router(services.reverse: _*)
 
-      private val serviceFactory: ServiceFactory[FinagleRequest, FinagleResponse] = ServiceFactory(() => Future {
+      private val serviceFactory: ServiceFactory[Request, Response] = ServiceFactory(() => Future {
         FinagleService.mk {
-          aggregateService.dimap(request.to, response.from).mapK(_.asFuture()).run
+          aggregateService.mapK(_.asFuture()).run
         }
       })
 
@@ -101,17 +99,14 @@ case class FinagleServerBuilder(
       }
 
       private val finagleServer: ListeningServer =
-        if (lowLevel) {
-          builder.stack(
-            new Netty4Server[Request, Response](bufferSize, {
-              new Netty4ServerDispatcher(_, _)
-            })
-          ).build(serviceFactory)
+        (if (lowLevel) {
+          builder.stack(new Netty4Server[Request, Response](bufferSize, {
+            new Netty4ServerDispatcher(_, _)
+          }))
         } else {
-          builder.codec(
-            new ServerCodec(stats).server
-          ).build(serviceFactory)
-        }
+          builder.codec(new ServerCodec(stats).server)
+        }).build(serviceFactory)
+
       private def getContext: Option[(SSLContext, Boolean)] = sslBits.map { bits =>
         val ksStream = new FileInputStream(bits.keyStore.path)
         val ks = KeyStore.getInstance("JKS")

@@ -1,6 +1,6 @@
-package org.http4s.finagle
+package org.http4s
+package finagle
 
-import com.twitter.finagle.http.{ Request, Response }
 import com.twitter.finagle.stats.StatsReceiver
 import com.twitter.finagle.transport.Transport
 import com.twitter.finagle.{ Codec, CodecFactory, Service }
