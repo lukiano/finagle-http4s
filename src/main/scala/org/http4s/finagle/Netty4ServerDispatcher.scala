@@ -12,7 +12,7 @@ import io.netty.handler.codec.http._
 import Netty4Converters._
 import org.log4s.getLogger
 import scodec.bits.ByteVector
-
+import scalaz.{ -\/, \/, \/- }
 import scalaz.concurrent.Task
 import scalaz.stream.Process._
 import scalaz.stream.{ Cause, Process, Sink }
@@ -53,23 +53,40 @@ private[finagle] class Netty4ServerDispatcher(
         trans.write(LastHttpContent.EMPTY_LAST_CONTENT)
     }
 
-  private val consume: Any => HttpContent = {
-    case chunk: HttpContent => chunk
-    case unexpected         => throw new IllegalArgumentException(s"Unexpected message $unexpected")
+  private def readChunks: Process[Task, ByteVector] = {
+    def consume: Task[ByteVector \/ ByteVector] = // left means is the last bytevector
+      trans.read().asTask flatMap {
+        case last: LastHttpContent =>
+          val content = last.content()
+          if (content.isReadable) {
+            Task.now(toBv(content).left)
+          } else {
+            Task.fail(Cause.Terminated(Cause.End))
+          }
+        case chunk: HttpContent =>
+          val content = chunk.content() // unwrap(chunk.content())
+          if (content.isReadable()) {
+            Task.now(toBv(content).right)
+          } else {
+            consume
+          }
+        case unexpected =>
+          Task.fail(new IllegalStateException(s"Unexpected message $unexpected"))
+      }
+
+    def step: Process[Task, ByteVector] =
+      await(Task.suspend(consume)) {
+        case \/-(bv) => emit(bv) ++ step // right
+        case -\/(bv) => emit(bv) ++ halt
+      }
+    step
   }
 
-  private def readChunks: Process[Task, HttpContent] =
-    repeatEval {
-      Task.suspend {
-        trans.read().asTask map consume
-      }
-    }
-
   private def toBv(content: ByteBuf): ByteVector =
-    if (content.hasArray) {
-      ByteVector.view(content.array())
+    if (content.hasArray && content.arrayOffset() == 0) {
+      ByteVector.view(content.array)
     } else {
-      ByteVector.view(content.internalNioBuffer(0, content.readableBytes))
+      ByteVector.view(content.nioBuffer)
     }
 
   protected override def dispatch(req: Any, eos: Promise[Unit]): Future[Response] = req match {
@@ -79,7 +96,7 @@ private[finagle] class Netty4ServerDispatcher(
         if (content.isReadable) {
           Process.emit(toBv(content))
         } else Process.halt
-      }
+      } onHalt { _.asHalt }
 
       val connection = Request.Connection(
         trans.localAddress.asInstanceOf[InetSocketAddress],
@@ -99,21 +116,15 @@ private[finagle] class Netty4ServerDispatcher(
 
     case req: HttpRequest =>
       val stream: EntityBody = {
-        val t: Task[Any] =
+        val t: Task[Unit] =
           if (HttpUtil.is100ContinueExpected(req))
             Task.suspend {
               trans.write(OneHundredContinueResponse).asTask
             }
           else
             Task.now(())
-        val chunks: Process[Task, HttpContent] = Process.eval(t) flatMap { _ => readChunks }
-        chunks map {
-          case last: LastHttpContent =>
-            throw Cause.Terminated(Cause.End)
-          case chunk =>
-            toBv(chunk.content)
-        }
-      }
+        Process.eval(t) flatMap { _ => readChunks }
+      } onHalt { _.asHalt }
 
       val connection = Request.Connection(
         trans.localAddress.asInstanceOf[InetSocketAddress],
@@ -141,8 +152,9 @@ private[finagle] class Netty4ServerDispatcher(
     import HttpHeaderValues._
     val nettyResponse = handleResponse(rep)
 
-    if (nettyResponse.status.code >= 400)
+    if (nettyResponse.status.code >= 400) {
       nettyResponse.headers().set(CONNECTION, CLOSE)
+    }
 
     if (rep.body.isHalt) {
       rep.body.run asFuture {
@@ -163,7 +175,9 @@ private[finagle] class Netty4ServerDispatcher(
     } else if (nettyResponse.isInstanceOf[FullHttpResponse]) {
       trans.write(nettyResponse)
     } else {
-      nettyResponse.headers().set(TRANSFER_ENCODING, CHUNKED)
+      if (rep.contentLength.isEmpty) {
+        nettyResponse.headers().set(TRANSFER_ENCODING, CHUNKED)
+      }
       trans.write(nettyResponse) before writeChunks(rep)
     }
   }

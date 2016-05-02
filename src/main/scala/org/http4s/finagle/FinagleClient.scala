@@ -2,9 +2,9 @@ package org.http4s
 package finagle
 
 import client.{ Client, DisposableResponse }
-import com.twitter.finagle.{ Address, Name, Http, ServiceFactory }
+import com.twitter.finagle.{ Address, Name, Http => Netty3Http, ServiceFactory }
 import com.twitter.finagle.http.{ Request => FinagleRequest, Response => FinagleResponse }
-
+import com.twitter.finagle.netty4.Netty4Http
 import scala.collection.concurrent.TrieMap
 import scalaz.concurrent.Task
 import scalaz.syntax.monad._
@@ -23,11 +23,17 @@ object FinagleClient {
     Name.bound(Address(req.uri.host.get.value, port))
   }
 
-  def apply(): Client = {
+  def apply(useNetty4: Boolean): Client = {
     val clients = new TrieMap[Name.Bound, ServiceFactory[FinagleRequest, FinagleResponse]]
 
     def getClient(name: Name.Bound): ServiceFactory[FinagleRequest, FinagleResponse] =
-      clients.getOrElseUpdate(name, Http.newClient(name, ""))
+      clients.getOrElseUpdate(
+        name,
+        if (useNetty4)
+          Netty4Http.newClient(name, "")
+        else
+          Netty3Http.newClient(name, "")
+      )
 
     def service(req: Request): Task[DisposableResponse] = Task.suspend {
       val fResponse = for {

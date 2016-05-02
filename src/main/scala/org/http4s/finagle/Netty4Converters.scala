@@ -115,5 +115,5 @@ object Netty4Converters {
     nettyResponse
   }
 
-  private[finagle] object OneHundredContinueResponse extends DefaultHttpResponse(NettyVersion.HTTP_1_1, NettyStatus.CONTINUE)
+  private[finagle] object OneHundredContinueResponse extends DefaultFullHttpResponse(NettyVersion.HTTP_1_1, NettyStatus.CONTINUE)
 }

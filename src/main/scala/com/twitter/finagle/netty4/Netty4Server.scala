@@ -27,6 +27,7 @@ case class Netty4Server[Req1, Rep1](
   protected def newListener(): Listener[Any, Any] =
     Netty4Listener(params + PipelineInit(cf => {
       cf.addLast("HttpServerCodec", new HttpServerCodec(4096, 8192, bufferSize))
+      cf.addLast("ContentRetainer", ContentRetainer)
       ()
     }))
 

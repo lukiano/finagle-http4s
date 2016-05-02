@@ -10,17 +10,19 @@ import javax.net.ssl.{ KeyManagerFactory, SSLContext, TrustManagerFactory }
 import com.codahale.metrics.MetricRegistry
 import com.twitter.concurrent.{ BridgedThreadPoolScheduler, Scheduler }
 import com.twitter.finagle.builder.{ ServerBuilder => FinagleBuilder }
+import com.twitter.finagle.netty4.{ Native, Netty4Server }
 import com.twitter.finagle.stats.{ DefaultStatsReceiver, StatsReceiver }
 import com.twitter.finagle.util.InetSocketAddressUtil
-import com.twitter.finagle.{ ListeningServer, ServiceFactory, Service => FinagleService }
-import com.twitter.util.{ Await, Future, Duration => TwitterDuration }
+import com.twitter.finagle.{ ListeningServer, ServiceFactory, Service => FinagleService, Stack }
+import com.twitter.util.{ Await, Future, Time, Duration => TwitterDuration }
 import org.http4s.server._
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.Duration
 import scalaz.concurrent.Task
 import scalaz.syntax.std.option._
-import com.twitter.finagle.netty4.Netty4Server
+
+case class Netty4(native: Boolean)
 
 case class FinagleServerBuilder(
     executorService: Option[ExecutorService]     = None,
@@ -30,7 +32,7 @@ case class FinagleServerBuilder(
     metricPrefix:    Option[String]              = None,
     idleTimeout:     Duration                    = IdleTimeoutSupport.DefaultIdleTimeout,
     sslBits:         Option[SSLSupport.SSLBits]  = None,
-    lowLevel:        Boolean                     = false
+    netty4:          Option[Netty4]              = None
 ) extends ServerBuilder with MetricsSupport with IdleTimeoutSupport with SSLSupport {
 
   override type Self = FinagleServerBuilder
@@ -50,10 +52,14 @@ case class FinagleServerBuilder(
   override def withSSL(keyStore: SSLSupport.StoreInfo, keyManagerPassword: String, protocol: String, trustStore: Option[SSLSupport.StoreInfo], clientAuth: Boolean) =
     copy(sslBits = Some(SSLSupport.SSLBits(keyStore, keyManagerPassword, protocol, trustStore, clientAuth)))
 
-  def withLowLevelDispatcher(lowLevel: Boolean) = copy(lowLevel = lowLevel)
+  def withNetty4Dispatcher(options: Option[Netty4]) = copy(netty4 = options)
 
   override def start: Task[Server] = Task.delay {
-    NettyLogger()
+    if (netty4.isDefined)
+      NettyLogger.netty4()
+    else
+      NettyLogger.netty3()
+
     val finagleLogger = com.twitter.finagle.util.DefaultLogger
     finagleLogger.setLevel(java.util.logging.Level.ALL)
     finagleLogger.setUseParentHandlers(false)
@@ -99,13 +105,16 @@ case class FinagleServerBuilder(
       }
 
       private val finagleServer: ListeningServer =
-        (if (lowLevel) {
-          builder.stack(new Netty4Server[Request, Response](bufferSize, {
-            new Netty4ServerDispatcher(_, _)
-          }))
-        } else {
+        netty4.cata(
+          options => {
+          builder.stack(new Netty4Server[Request, Response](
+            bufferSize = bufferSize,
+            dispatcherBuilder = { new Netty4ServerDispatcher(_, _) },
+            params = if (options.native) Stack.Params.empty + Native(true) else Stack.Params.empty
+          ))
+        },
           builder.codec(new ServerCodec(stats).server)
-        }).build(serviceFactory)
+        ).build(serviceFactory)
 
       private def getContext: Option[(SSLContext, Boolean)] = sslBits.map { bits =>
         val ksStream = new FileInputStream(bits.keyStore.path)
@@ -139,7 +148,7 @@ case class FinagleServerBuilder(
         (context, bits.clientAuth)
       }
 
-      override def shutdown: Task[Unit] = finagleServer.close().asTask
+      override def shutdown: Task[Unit] = finagleServer.close(Time.Top).asTask
 
       override def address: InetSocketAddress = InetSocketAddressUtil.toPublic(finagleServer.boundAddress).asInstanceOf[InetSocketAddress]
 
